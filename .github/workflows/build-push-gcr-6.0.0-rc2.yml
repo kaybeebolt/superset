@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - "6.0.0-rc2"
+      - "release/6.0.0-rc2"
     tags:
       - "v6.0.0-rc2"
   pull_request:
