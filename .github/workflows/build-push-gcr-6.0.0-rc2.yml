@@ -107,7 +107,7 @@ jobs:
 
       - name: Print image details
         run: |
-          echo "Build completed successfully!"
+          echo "Build completed successfully"
           echo "Version: ${{ env.VERSION }}"
           echo "Preset: ${{ matrix.build_preset }}"
           echo "Registry: ${{ env.GCR_REGISTRY }}"
