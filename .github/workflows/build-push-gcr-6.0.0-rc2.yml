@@ -1,0 +1,135 @@
+name: Build & Push Superset 6.0.0-rc2 to GCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      gcr_registry:
+        description: 'GCR Registry (e.g., europe-west1-docker.pkg.dev/project-id/registry-name)'
+        required: true
+        default: 'europe-west1-docker.pkg.dev'
+  push:
+    branches:
+      - "6.0.0-rc2"
+    tags:
+      - "v6.0.0-rc2"
+  pull_request:
+    branches:
+      - "6.0.0-rc2"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  VERSION: "6.0.0-rc2"
+  IMAGE_NAME: "superset"
+
+jobs:
+  setup_matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix_config: ${{ steps.set_matrix.outputs.matrix_config }}
+    steps:
+      - id: set_matrix
+        run: |
+          # For workflow_dispatch or tags, build all presets; for PRs, build minimal set
+          MATRIX_CONFIG=$(if [ "${{ github.event_name }}" == "pull_request" ]; then echo '["lean"]'; else echo '["lean", "dev", "py310", "py311", "py312"]'; fi)
+          echo "matrix_config=${MATRIX_CONFIG}" >> $GITHUB_OUTPUT
+          echo "Matrix config: ${MATRIX_CONFIG}"
+
+  docker-build-push-gcr:
+    name: Build & Push to GCR - ${{ matrix.build_preset }}
+    needs: setup_matrix
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        build_preset: ${{fromJson(needs.setup_matrix.outputs.matrix_config)}}
+      fail-fast: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCR_REGISTRY: ${{ github.event.inputs.gcr_registry || 'europe-west1-docker.pkg.dev' }}
+
+    steps:
+
+      - name: "Checkout ${{ github.ref }} ( ${{ github.sha }} )"
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-options: image=moby/buildkit:latest
+
+      # Authenticate to Google Cloud for GCR access
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: |
+          gcloud auth configure-docker ${{ env.GCR_REGISTRY }}
+
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.GCR_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=sha
+            type=raw,value=${{ env.VERSION }}-${{ matrix.build_preset }}
+            type=raw,value=${{ env.VERSION }}-${{ matrix.build_preset }}-${{ github.run_id }}
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: ${{ matrix.build_preset }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            INCLUDE_CHROMIUM=false
+            BUILD_TRANSLATIONS=true
+
+      - name: Print image details
+        run: |
+          echo "Build completed successfully!"
+          echo "Version: ${{ env.VERSION }}"
+          echo "Preset: ${{ matrix.build_preset }}"
+          echo "Registry: ${{ env.GCR_REGISTRY }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+
+      - name: Verify image in GCR
+        if: github.event_name != 'pull_request'
+        run: |
+          gcloud container images list --repository=${{ env.GCR_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }} --filter="${{ env.IMAGE_NAME }}" --format='table(name)'
+          echo "Image verification complete"
+
+  notify-completion:
+    name: Notify Completion
+    needs: [docker-build-push-gcr]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Check job status
+        run: |
+          if [ "${{ needs.docker-build-push-gcr.result }}" == "success" ]; then
+            echo "✅ All images built and pushed successfully to GCR!"
+          else
+            echo "❌ Build failed. Please check the logs above."
+            exit 1
+          fi
