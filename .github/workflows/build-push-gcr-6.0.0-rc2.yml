@@ -24,6 +24,8 @@ concurrency:
 env:
   VERSION: "6.0.0-rc2"
   IMAGE_NAME: "superset"
+  GCR_REGISTRY: "europe-west1-docker.pkg.dev"
+  GCP_PROJECT_ID: "freight-staging"
 
 jobs:
   setup_matrix:
