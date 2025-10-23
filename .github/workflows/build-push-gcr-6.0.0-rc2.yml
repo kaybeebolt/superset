@@ -82,7 +82,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.GCR_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}
+            ${{ env.GCR_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/superset-registry/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}},value=${{ env.VERSION }}
